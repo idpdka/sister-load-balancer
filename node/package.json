@@ -1,0 +1,35 @@
+{
+  "name": "sister-load-balancer",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "watch-compile": "gulp",
+    "watch-start": "nodemon --watch build -e js bin/www",
+    "prod-start": "gulp buildonly && node ./bin/www",
+    "start": "concurrently --kill-others \"npm run watch-compile\" \"npm run watch-start\""
+  },
+  "dependencies": {
+    "body-parser": "~1.16.0",
+    "cookie-parser": "~1.4.3",
+    "debug": "~2.6.0",
+    "express": "~4.14.1",
+    "firebase": "^3.6.10",
+    "firebase-admin": "^4.1.1",
+    "geofire": "^4.1.2",
+    "moment": "^2.17.1",
+    "morgan": "~1.7.0",
+    "node-fetch": "^1.6.3",
+    "serve-favicon": "~2.3.2",
+    "shortid": "^2.2.8"
+  },
+  "devDependencies": {
+    "babel-plugin-transform-runtime": "^6.23.0",
+    "babel-preset-latest": "^6.22.0",
+    "concurrently": "^3.3.0",
+    "gulp": "^3.9.1",
+    "gulp-babel": "^6.1.2",
+    "gulp-watch": "^4.3.11",
+    "nodemon": "^1.11.0",
+    "standard": "^8.6.0"
+  }
+}
