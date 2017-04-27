@@ -236,7 +236,7 @@ async function leaderProcess () {
 
     for (let {node, response} of aeResponses.filter(r => r.response)) {
       if (response) {
-        let {term, success} = response
+        let {term, success, empty} = response
 
         if (term > nodeState.currentTerm) {
           debug(`Discovered follower with higher term, reverting to follower`)
@@ -246,7 +246,10 @@ async function leaderProcess () {
         }
 
         if (!success) {
-          if (node.nextIndex >= 0) node.nextIndex--
+          if (empty && nodeState.log.length > 0) {
+            debug(`Node ${node.id} is empty! Just send everything`)
+            node.nextIndex = 0
+          } else if (node.nextIndex > 0) node.nextIndex--
         } else {
           node.nextIndex = node.matchIndex = nodeState.lastLogIndex()
         }
@@ -255,11 +258,11 @@ async function leaderProcess () {
 
     // Incrementing commitIndex
     while (true) {
-      if (nodeState.commitIndex === nodeState.lastLogIndex) break
+      if (nodeState.commitIndex === nodeState.lastLogIndex()) break
 
       let newCommitted = nodeState.commitIndex + 1
 
-      let matches = 0
+      let matches = 1 // With myself
       for (let node of nodes) {
         if (node.matchIndex >= newCommitted) {
           matches++
@@ -267,8 +270,10 @@ async function leaderProcess () {
       }
 
       if (matches > nodeCount / 2) {
+        debug(`Incrementing commitIndex...`)
         nodeState.commitIndex = newCommitted
       } else {
+        debug(`Don't have a majority, can't commit data`)
         break
       }
     }
@@ -328,6 +333,7 @@ export async function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm,
 
   return {
     term: nodeState.currentTerm,
+    empty: nodeState.log.length === 0,
     success: success
   }
 }
