@@ -32,6 +32,8 @@ let nodeState = {
   */
   log: [],
 
+  data: {},
+
   lastLogIndex () {
     return nodeState.log.length - 1
   },
@@ -43,11 +45,12 @@ let nodeState = {
     }
   },
 
-  nextIndex: {},
-  matchIndex: {}
+  commitIndex: -1,
+  lastApplied: -1
 }
 
 // All nodes, excluding the current one.
+let nodeCount
 let nodes = []
 
 let timeout = {
@@ -102,10 +105,13 @@ function isReady () {
 export async function loadNodes (nodesFilePath) {
   const fileData = fs.readFileSync(nodesFilePath, 'utf8')
   let nodeLocations = fileData.split(/[\r\n]+/g).filter(x => x.length > 0)
-  for (let i = 0; i < nodeLocations.length; i++) {
+  nodeCount = nodeLocations.length
+  for (let i = 0; i < nodeCount; i++) {
     const nodeLocation = nodeLocations[i]
     const node = rpc(`http://${nodeLocation}`, {
       id: i,
+      nextIndex: -1,
+      matchIndex: -1,
       location: nodeLocation
     })
 
@@ -127,19 +133,16 @@ export async function loadNodes (nodesFilePath) {
 export async function start () {
   await loadNodes('../nodes.txt')
 
-  timeout.startFollowerTimeout()
+  await changeNodeState('follower')
 }
 
 // Handlers for timeouts
 function followerTimeout () {
   debug(`No info from leader at term ${nodeState.currentTerm}`)
-  nodeState.state = 'candidate'
-  nodeState.currentTerm++
-  startElection()
+  changeNodeState('candidate')
 }
 
 function electionTimeout () {
-  // Split vote case
   if (nodeState.state === 'candidate') {
     debug('Starting another election...')
     startElection()
@@ -147,8 +150,38 @@ function electionTimeout () {
 }
 
 // Utility functions
+async function changeNodeTerm (term) {
+  if (term < nodeState.currentTerm) throw new Error(`currentTerm must be increasing`)
+  if (term > nodeState.currentTerm) {
+    nodeState.votedFor = null
+  }
+  nodeState.currentTerm = term
+}
+
+async function incrementNodeTerm () {
+  await changeNodeTerm(nodeState.currentTerm + 1)
+}
+
+async function changeNodeState (state) {
+  nodeState.state = state
+  if (state === 'follower') {
+    timeout.startFollowerTimeout()
+  } else if (state === 'candidate') {
+    startElection()
+  } else if (state === 'leader') {
+    for (let node of nodes) {
+      node.nextIndex = nodeState.lastLogIndex() + 1
+      node.matchIndex = -1
+    }
+    leaderProcess()
+  } else {
+    throw new Error(`Programmer error`)
+  }
+}
+
 async function startElection () {
   debug(`Starting election`)
+  await incrementNodeTerm()
 
   nodeState.votedFor = nodeState.id
 
@@ -174,9 +207,9 @@ async function startElection () {
   }
 
   if (votes > nodes.length / 2) {
-    nodeState.state = 'leader'
     debug(`Got the majority vote. I'm now the leader`)
-    leaderProcess()
+
+    changeNodeState('leader')
   } else {
     debug(`Not enough votes! Preparing to restart election`)
     timeout.startElectionTimeout()
@@ -185,48 +218,126 @@ async function startElection () {
 
 async function leaderProcess () {
   if (nodeState.state === 'leader') {
-    const aePromises = nodes.map(n => n.appendEntries({
-      term: nodeState.currentTerm,
-      leaderId: nodeState.id,
-      prevLogIndex: nodeState.log.length - 1,
-      prevLogTerm: 0,
-      entries: [],
-      leaderCommit: false
-    }))
+    const aePromises = nodes.map(n => {
+      const prevLogIndex = n.nextIndex - 1
+      const prevLogTerm = prevLogIndex >= 0 ? nodeState.log[prevLogIndex] : 0
 
-    const aeResponses = await Promise.all(aePromises)
+      return n.appendEntries({
+        term: nodeState.currentTerm,
+        leaderId: nodeState.id,
+        prevLogIndex,
+        prevLogTerm,
+        entries: nodeState.log.slice(prevLogIndex + 1),
+        leaderCommit: nodeState.commitIndex
+      }).then(response => ({node: n, response}))
+    })
+
+    let aeResponses = await Promise.all(aePromises)
+
+    for (let {node, response} of aeResponses.filter(r => r.response)) {
+      if (response) {
+        let {term, success} = response
+
+        if (term > nodeState.currentTerm) {
+          debug(`Discovered follower with higher term, reverting to follower`)
+          changeNodeTerm(term)
+          changeNodeState('follower')
+          break
+        }
+
+        if (!success) {
+          if (node.nextIndex >= 0) node.nextIndex--
+        } else {
+          node.nextIndex = node.matchIndex = nodeState.lastLogIndex()
+        }
+      }
+    }
+
+    // Incrementing commitIndex
+    while (true) {
+      if (nodeState.commitIndex === nodeState.lastLogIndex) break
+
+      let newCommitted = nodeState.commitIndex + 1
+
+      let matches = 0
+      for (let node of nodes) {
+        if (node.matchIndex >= newCommitted) {
+          matches++
+        }
+      }
+
+      if (matches > nodeCount / 2) {
+        nodeState.commitIndex = newCommitted
+      } else {
+        break
+      }
+    }
+
+    applyData()
 
     setTimeout(leaderProcess, 1000)
   }
 }
 
-// RPC methods for communication between nodes, based on raft paper
-export function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit}) {
-  if (!isReady()) return null
-  timeout.refreshFollowerTimeout()
+function applyData () {
+  // Applying log to data
+  while (nodeState.lastApplied < nodeState.commitIndex) {
+    nodeState.lastApplied++
+    const {key, value} = nodeState.log[nodeState.lastApplied].data
+    debug(`Applying data by setting ${key} = ${value}`)
+    nodeState.data[key] = value
 
-  if (term >= nodeState.currentTerm && nodeState.state !== 'follower') {
-    debug(`Another leader has appeared, switching to follower`)
-    nodeState.state = 'follower'
-  }
-
-  if (term > nodeState.currentTerm) {
-    nodeState.currentTerm = term
-  }
-
-  return {
-    term: nodeState.currentTerm,
-    success: true
+    debug(`Data is now: ${JSON.stringify(nodeState.data)}`)
   }
 }
 
-export function requestVote ({term, candidateId, lastLogIndex, lastLogTerm}) {
+// RPC methods for communication between nodes, based on raft paper
+export async function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit}) {
+  if (!isReady()) return null
+  timeout.refreshFollowerTimeout()
+
+  if (term >= nodeState.currentTerm && nodeState.state === 'candidate') {
+    debug(`Another leader has appeared, switching to follower`)
+    changeNodeState('follower')
+  }
+
+  if (term > nodeState.currentTerm) {
+    changeNodeTerm(term)
+  }
+
+  let success = true
+
+  if (term < nodeState.currentTerm) {
+    success = false
+  } else if (
+    prevLogIndex > nodeState.lastLogIndex() ||
+    (nodeState.log.length > 0 && prevLogIndex >= 0 && nodeState.log[prevLogIndex].term !== prevLogTerm)) {
+    success = false
+  } else {
+    nodeState.log.splice(prevLogIndex + 1)
+    entries.forEach(e => {
+      nodeState.log.push(e)
+    })
+
+    if (leaderCommit > nodeState.commitIndex) {
+      nodeState.commitIndex = Math.min(leaderCommit, nodeState.lastLogIndex())
+    }
+  }
+
+  applyData()
+
+  return {
+    term: nodeState.currentTerm,
+    success: success
+  }
+}
+
+export async function requestVote ({term, candidateId, lastLogIndex, lastLogTerm}) {
   if (!isReady()) return null
   timeout.refreshFollowerTimeout()
 
   if (term > nodeState.currentTerm) {
-    nodeState.currentTerm = term
-    nodeState.votedFor = null
+    await changeNodeTerm(term)
   }
 
   const grantVote = !(term < nodeState.currentTerm) &&
@@ -247,4 +358,21 @@ export function setNodeId ({id, randomId}) {
     return true
   }
   return false
+}
+
+export async function setData (key, value) {
+  if (nodeState.state === 'leader') {
+    nodeState.log.push({
+      index: nodeState.lastLogIndex() + 1,
+      term: nodeState.currentTerm,
+      data: {
+        key,
+        value
+      }
+    })
+  }
+}
+
+export function getNodeState () {
+  return nodeState
 }

@@ -24,4 +24,16 @@ router.post('/rpc', ar(async function (req, res, next) {
   res.send(JSON.stringify(await rpcMap[action](data)))
 }))
 
+router.get('/set/:key/:value', ar(async function (req, res, next) {
+  const {key, value} = req.params
+
+  raft.setData(key, parseFloat(value))
+
+  res.send('OK')
+}))
+
+router.get('/state', ar(async function (req, res, next) {
+  res.send(JSON.stringify(raft.getNodeState()))
+}))
+
 module.exports = router
