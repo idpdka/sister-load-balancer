@@ -1,31 +1,28 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 import psutil
-import urllib.request
+import requests
 
 
 if __name__ == '__main__':
-	file = open('addresses.txt', 'r') 
+    f = open('nodes.txt', 'r')
+    hosts = [l.strip() for l in f]
+    f.close()
 
-	try:
-		while True:
-			for line in file:
-				# Requesting GET to server
-				urllib.request.urlopen(line).read()
+    try:
+        while True:
+            # Obtaining the CPU Load per core
+            loadPercentage = psutil.cpu_percent(interval=3)
 
-				# Obtaining the CPU Load per core
-				loadPercentage = psutil.cpu_percent(interval=10, percpu=True)
-				
-				# loadAverage = os.getloadavg()
-				print("CPU Load per core for " + line)
-				for i in range(len(loadPercentage)):
-					print("Core " + str(i) + " = "+ str(loadPercentage[i]) + "%")
-				# print("CPU Load Average : " + str(loadAverage))
-				print("\n")		
-	except KeyboardInterrupt:
-		pass
+            # loadAverage = os.getloadavg()
+            print("CPU Load {}".format(loadPercentage))
+            for host in hosts:
 
-	file.close()
+                # Requesting GET to server
+                try:
+                    requests.get('http://{}/set/{}/{}'.format(host, 'localhost', loadPercentage), timeout=0.1).text
+                except requests.exceptions.ConnectionError:
+                    print('Node at {} is down.'.format(host))
 
-
-
+    except KeyboardInterrupt:
+        pass

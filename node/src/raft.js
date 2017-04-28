@@ -220,7 +220,7 @@ async function leaderProcess () {
   if (nodeState.state === 'leader') {
     const aePromises = nodes.map(n => {
       const prevLogIndex = n.nextIndex - 1
-      const prevLogTerm = prevLogIndex >= 0 ? nodeState.log[prevLogIndex] : 0
+      const prevLogTerm = prevLogIndex >= 0 ? nodeState.log[prevLogIndex].term : 0
 
       return n.appendEntries({
         term: nodeState.currentTerm,
@@ -249,7 +249,10 @@ async function leaderProcess () {
           if (empty && nodeState.log.length > 0) {
             debug(`Node ${node.id} is empty! Just send everything`)
             node.nextIndex = 0
-          } else if (node.nextIndex > 0) node.nextIndex--
+          } else if (node.nextIndex > 0) {
+            debug(`Node ${node.id} does not have ${node.nextIndex - 1} yet.`)
+            node.nextIndex--
+          }
         } else {
           node.nextIndex = node.matchIndex = nodeState.lastLogIndex()
         }
@@ -273,7 +276,7 @@ async function leaderProcess () {
         debug(`Incrementing commitIndex...`)
         nodeState.commitIndex = newCommitted
       } else {
-        debug(`Don't have a majority, can't commit data`)
+        debug(`Don't have a majority, can't commit data yet`)
         break
       }
     }
@@ -314,6 +317,7 @@ export async function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm,
 
   if (term < nodeState.currentTerm) {
     success = false
+    debug(`Leader has outdated term.`)
   } else if (
     prevLogIndex > nodeState.lastLogIndex() ||
     (nodeState.log.length > 0 && prevLogIndex >= 0 && nodeState.log[prevLogIndex].term !== prevLogTerm)) {
@@ -368,6 +372,8 @@ export function setNodeId ({id, randomId}) {
 
 export async function setData (key, value) {
   if (nodeState.state === 'leader') {
+    debug(`Received request to set ${key} to ${value}`)
+
     nodeState.log.push({
       index: nodeState.lastLogIndex() + 1,
       term: nodeState.currentTerm,
