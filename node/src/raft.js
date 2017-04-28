@@ -1,6 +1,7 @@
 import rpc from './rpc'
 import fs from 'fs'
 import shortid from 'shortid'
+import moment from 'moment'
 
 import baseDebug from 'debug'
 const debug = baseDebug('raft')
@@ -383,6 +384,48 @@ export async function setData (key, value) {
       }
     })
   }
+}
+
+export async function setLoad (host, load) {
+  if (nodeState.state === 'leader') {
+    debug(`Received request to set load of ${host} to ${load}`)
+
+    nodeState.log.push({
+      index: nodeState.lastLogIndex() + 1,
+      term: nodeState.currentTerm,
+      data: {
+        key: host,
+        value: {
+          lastContact: +moment(),
+          load
+        }
+      }
+    })
+  }
+}
+
+export async function getLowestLoadActiveHost () {
+  // Active means has contacted daemon within the last 10 seconds
+
+  const hosts = Object.keys(nodeState.data)
+
+  const activeHosts = hosts.filter(host => {
+    const hostLastContact = moment(nodeState.data[host].lastContact)
+
+    return moment().diff(hostLastContact, 'seconds') < 10
+  })
+
+  if (activeHosts.length <= 0) return ''
+
+  const result = activeHosts.slice(1).reduce((a, b) => {
+    if (nodeState.data[a].load < nodeState.data[b].load) {
+      return a
+    } else {
+      return b
+    }
+  }, activeHosts[0])
+
+  return result
 }
 
 export function getNodeState () {

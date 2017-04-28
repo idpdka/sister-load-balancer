@@ -1,10 +1,11 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
+import sys
 import psutil
 import requests
 
-
 if __name__ == '__main__':
+    worker_location = sys.argv[1]
     f = open('nodes.txt', 'r')
     hosts = [l.strip() for l in f]
     f.close()
@@ -20,7 +21,7 @@ if __name__ == '__main__':
 
                 # Requesting GET to server
                 try:
-                    requests.get('http://{}/set/{}/{}'.format(host, 'localhost', loadPercentage), timeout=0.1).text
+                    requests.get('http://{}/load/{}/{}'.format(host, worker_location, loadPercentage), timeout=0.1).text
                 except requests.exceptions.ConnectionError:
                     print('Node at {} is down.'.format(host))
 
