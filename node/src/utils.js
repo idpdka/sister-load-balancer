@@ -4,6 +4,7 @@ export function clamp (a, b, x) {
   else return x
 }
 
+// Make using async functions in routes easier and safer
 export function asyncRouter (asyncFn) {
   return function (req, res, next) {
     asyncFn(req, res, next)

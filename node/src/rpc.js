@@ -3,6 +3,7 @@ import fetch from 'node-fetch'
 import baseDebug from 'debug'
 const debug = baseDebug('rpc')
 
+// Function to generate a proxy object that automatically sends requests
 export default function rpc (address, initialData = {}) {
   return new Proxy(initialData, {
     get (target, name) {

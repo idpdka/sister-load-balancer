@@ -14,6 +14,7 @@ router.get('/', function (req, res, next) {
   res.send(`API server running, but there's nothing here.`)
 })
 
+// Simple rpc receiver
 const rpcMap = {
   setNodeId: raft.setNodeId,
   appendEntries: raft.appendEntries,
@@ -25,6 +26,7 @@ router.post('/rpc', ar(async function (req, res, next) {
   res.send(JSON.stringify(await rpcMap[action](data)))
 }))
 
+// Set kev/value on map directly, used for debugging
 router.get('/set/:key/:value', ar(async function (req, res, next) {
   const {key, value} = req.params
 
@@ -33,6 +35,7 @@ router.get('/set/:key/:value', ar(async function (req, res, next) {
   res.send('OK')
 }))
 
+// Set load for a host
 router.get('/load/:key/:value', ar(async function (req, res, next) {
   const {key, value} = req.params
 
@@ -41,6 +44,7 @@ router.get('/load/:key/:value', ar(async function (req, res, next) {
   res.send('OK')
 }))
 
+// Return the host that will be used for prime number generation
 router.get('/prime/dest', ar(async function (req, res, next) {
   const dest = await raft.getLowestLoadActiveHost()
 
@@ -51,6 +55,7 @@ router.get('/prime/dest', ar(async function (req, res, next) {
   }
 }))
 
+// Prime number reverse proxy
 router.get('/prime/:n', ar(async function (req, res, next) {
   const {n} = req.params
 
@@ -66,6 +71,7 @@ router.get('/prime/:n', ar(async function (req, res, next) {
   }
 }))
 
+// Return entire node state for debugging
 router.get('/state', ar(async function (req, res, next) {
   res.send(JSON.stringify(raft.getNodeState()))
 }))

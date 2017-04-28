@@ -46,14 +46,16 @@ let nodeState = {
     }
   },
 
+  // Minor difference with raft paper, log indexes are 0-based
   commitIndex: -1,
   lastApplied: -1
 }
 
-// All nodes, excluding the current one.
+// All nodes, excluding the current one. Updated by loadNodes
 let nodeCount
 let nodes = []
 
+// Timeout manager
 let timeout = {
   /*
     If a timeout is in progress, this contains:
@@ -71,6 +73,7 @@ let timeout = {
   },
 
   // The start methods also restart the timeouts, if any are running
+  // The names are a bit different from the raft paper
   startFollowerTimeout () {
     timeout.clearCurrentTimeout()
     timeout.currentTimeout = {
@@ -85,6 +88,7 @@ let timeout = {
       timeout: setTimeout(electionTimeout, 1500 + Math.random() * 1500)
     }
   },
+
   refreshFollowerTimeout () {
     if (nodeState.state === 'follower') {
       debug(`Refreshing follower timeout, term: ${nodeState.currentTerm}`)
@@ -151,18 +155,9 @@ function electionTimeout () {
 }
 
 // Utility functions
-async function changeNodeTerm (term) {
-  if (term < nodeState.currentTerm) throw new Error(`currentTerm must be increasing`)
-  if (term > nodeState.currentTerm) {
-    nodeState.votedFor = null
-  }
-  nodeState.currentTerm = term
-}
 
-async function incrementNodeTerm () {
-  await changeNodeTerm(nodeState.currentTerm + 1)
-}
-
+// Function to change node state
+// This function is the only one allowed to change nodeState.state directly
 async function changeNodeState (state) {
   nodeState.state = state
   if (state === 'follower') {
@@ -180,12 +175,27 @@ async function changeNodeState (state) {
   }
 }
 
+// Same with changeNodeState, this is also the only place nodeState.currentTerm can be modified
+async function changeNodeTerm (term) {
+  if (term < nodeState.currentTerm) throw new Error(`currentTerm must be increasing`)
+  if (term > nodeState.currentTerm) {
+    nodeState.votedFor = null
+  }
+  nodeState.currentTerm = term
+}
+
+async function incrementNodeTerm () {
+  await changeNodeTerm(nodeState.currentTerm + 1)
+}
+
+// Election process
 async function startElection () {
   debug(`Starting election`)
   await incrementNodeTerm()
 
   nodeState.votedFor = nodeState.id
 
+  // Send vote requests in parallel
   const rvPromises = nodes.map(n => n.requestVote({
     term: nodeState.currentTerm,
     candidateId: nodeState.id,
@@ -197,7 +207,7 @@ async function startElection () {
 
   debug(`All vote requests replied/timed out`)
 
-  let votes = 1
+  let votes = 1 // My own vote
 
   for (let rv of rvResults.filter(rv => rv)) {
     if (rv) {
@@ -217,8 +227,11 @@ async function startElection () {
   }
 }
 
+// One iteration of a leader's work
+// Includes: sending appendEntries, committing entries, and applying data
 async function leaderProcess () {
   if (nodeState.state === 'leader') {
+    // Send appendEntries in parallel
     const aePromises = nodes.map(n => {
       const prevLogIndex = n.nextIndex - 1
       const prevLogTerm = prevLogIndex >= 0 ? nodeState.log[prevLogIndex].term : 0
@@ -230,12 +243,14 @@ async function leaderProcess () {
         prevLogTerm,
         entries: nodeState.log.slice(prevLogIndex + 1),
         leaderCommit: nodeState.commitIndex
-      }).then(response => ({node: n, response}))
+      }).then(response => ({node: n, response})) // Associate each response with its node
     })
 
     let aeResponses = await Promise.all(aePromises)
 
+    // Process responses
     for (let {node, response} of aeResponses.filter(r => r.response)) {
+      // Response might be null, if the node is down
       if (response) {
         let {term, success, empty} = response
 
@@ -255,6 +270,7 @@ async function leaderProcess () {
             node.nextIndex--
           }
         } else {
+          // Successfully updated logs, update indexes with own lastLogIndex
           node.nextIndex = node.matchIndex = nodeState.lastLogIndex()
         }
       }
@@ -266,6 +282,7 @@ async function leaderProcess () {
 
       let newCommitted = nodeState.commitIndex + 1
 
+      // Check commitIndex majority
       let matches = 1 // With myself
       for (let node of nodes) {
         if (node.matchIndex >= newCommitted) {
@@ -284,10 +301,12 @@ async function leaderProcess () {
 
     applyData()
 
+    // Do the leader process again
     setTimeout(leaderProcess, 1000)
   }
 }
 
+// Apply log commands based on commitIndex and lastApplied
 function applyData () {
   // Applying log to data
   while (nodeState.lastApplied < nodeState.commitIndex) {
@@ -301,6 +320,8 @@ function applyData () {
 }
 
 // RPC methods for communication between nodes, based on raft paper
+// Code for receiving appendEntries
+// Most of the code are direct translations of raft spec
 export async function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit}) {
   if (!isReady()) return null
   timeout.refreshFollowerTimeout()
@@ -334,15 +355,18 @@ export async function appendEntries ({term, leaderId, prevLogIndex, prevLogTerm,
     }
   }
 
+  // Apply received log entries so it can be used
   applyData()
 
   return {
     term: nodeState.currentTerm,
+    // Extension for faster updates when a node is restarted
     empty: nodeState.log.length === 0,
     success: success
   }
 }
 
+// Code for receiving requestVotes
 export async function requestVote ({term, candidateId, lastLogIndex, lastLogTerm}) {
   if (!isReady()) return null
   timeout.refreshFollowerTimeout()
@@ -351,6 +375,7 @@ export async function requestVote ({term, candidateId, lastLogIndex, lastLogTerm
     await changeNodeTerm(term)
   }
 
+  // Based on raft paper
   const grantVote = !(term < nodeState.currentTerm) &&
                     (nodeState.votedFor === null || nodeState.votedFor === candidateId) &&
                     lastLogIndex >= nodeState.lastLogIndex()
@@ -363,6 +388,7 @@ export async function requestVote ({term, candidateId, lastLogIndex, lastLogTerm
   }
 }
 
+// RPC used to determine own id, instead of messing with network interfaces and IPs
 export function setNodeId ({id, randomId}) {
   if (randomId === nodeState.randomId) {
     nodeState.id = id
@@ -371,6 +397,9 @@ export function setNodeId ({id, randomId}) {
   return false
 }
 
+// Exported functions for use by http routes
+
+// Directly set data on map
 export async function setData (key, value) {
   if (nodeState.state === 'leader') {
     debug(`Received request to set ${key} to ${value}`)
@@ -386,6 +415,7 @@ export async function setData (key, value) {
   }
 }
 
+// Set a host's cpu load
 export async function setLoad (host, load) {
   if (nodeState.state === 'leader') {
     debug(`Received request to set load of ${host} to ${load}`)
@@ -404,11 +434,14 @@ export async function setLoad (host, load) {
   }
 }
 
+// The name is probably descriptive enough
+// If no active host, return '' (a falsy value)
 export async function getLowestLoadActiveHost () {
   // Active means has contacted daemon within the last 10 seconds
 
   const hosts = Object.keys(nodeState.data)
 
+  // Filter inactive
   const activeHosts = hosts.filter(host => {
     const hostLastContact = moment(nodeState.data[host].lastContact)
 
@@ -428,6 +461,7 @@ export async function getLowestLoadActiveHost () {
   return result
 }
 
+// Function to get entire node state, useful for debug purposes
 export function getNodeState () {
   return nodeState
 }
