@@ -41,6 +41,16 @@ router.get('/load/:key/:value', ar(async function (req, res, next) {
   res.send('OK')
 }))
 
+router.get('/prime/dest', ar(async function (req, res, next) {
+  const dest = await raft.getLowestLoadActiveHost()
+
+  if (!dest) {
+    res.status(500).send('No active hosts!')
+  } else {
+    res.send(`The lowest load active host is ${dest}`)
+  }
+}))
+
 router.get('/prime/:n', ar(async function (req, res, next) {
   const {n} = req.params
 
