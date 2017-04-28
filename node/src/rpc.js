@@ -22,6 +22,7 @@ export default function rpc (address, initialData = {}) {
               })
             })
 
+            // Customize timeout for faster response when a node is down
             return Promise.race([
               resPromise.then(r => r.json()),
               new Promise(function (resolve, reject) {
